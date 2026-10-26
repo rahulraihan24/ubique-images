@@ -11,6 +11,8 @@ spec fields:
   options  : list of 4 strings (quiz only)
   body     : list of short lines (tip / answer)
   footer   : bottom-left line, e.g. "উত্তর কমেন্টে লেখো 👇"
+
+A spec with a "theme" field is drawn in the "UBIQUE card" style instead (see below).
 """
 import json, os, sys, urllib.request, zipfile, io, html
 from pathlib import Path
@@ -115,17 +117,137 @@ h1{{font-size:{tsize}px;line-height:1.45;margin:0 0 44px;font-weight:700}}
 </div></body></html>"""
 
 
+# ---------------------------------------------------------------------------
+# "UBIQUE card" style (spec has a "theme" field)
+#   theme   : navy | maroon | green | purple | teal
+#   kind    : quiz | answer
+#   tag     : pill text, e.g. "ক্লাস ৭"
+#   title   : heading; wrap key words in [ ] to colour them, e.g. "🧮 আজকের [ম্যাথ কুইজ]"
+#   question: quiz question text
+#   options : 4 short strings (quiz)
+#   answers : list of {"label","answer","work"} (answer card)
+#   footer  : call to action, bottom-left
+# In any text, {...} keeps that part on one line; "(...)" and "X-এর" tokens are kept together automatically.
+# ---------------------------------------------------------------------------
+CARD_THEMES = {
+    "navy":   ("#1f4f8f", "#0b1f3f", "#071530", "#f3c64c"),
+    "maroon": ("#8a2438", "#3d0d1a", "#24060f", "#f3c64c"),
+    "green":  ("#1e6b4b", "#0d2e22", "#061a13", "#f6d365"),
+    "purple": ("#5b2d9e", "#24124a", "#140a2b", "#ffc857"),
+    "teal":   ("#0f6f7f", "#06303a", "#031b21", "#ffd166"),
+}
+CARD_FONT_URL = "https://cdn.jsdelivr.net/npm/@fontsource/hind-siliguri@5.3.0/files/hind-siliguri-{sub}-{w}-normal.woff2"
+
+
+def ensure_card_fonts():
+    FONT_DIR.mkdir(exist_ok=True)
+    paths = {}
+    for sub in ("bengali", "latin"):
+        for w in (500, 700):
+            p = FONT_DIR / f"hind-siliguri-{sub}-{w}-normal.woff2"
+            if not p.exists():
+                p.write_bytes(urllib.request.urlopen(CARD_FONT_URL.format(sub=sub, w=w), timeout=60).read())
+            paths[(sub, w)] = p
+    return paths
+
+
+def has_emoji_font():
+    try:
+        import subprocess
+        return "Noto Color Emoji" in subprocess.run(["fc-list"], capture_output=True, text=True).stdout
+    except Exception:
+        return False
+
+
+def card_text(s, emoji_ok=True):
+    import re
+    s = str(s)
+    if not emoji_ok:
+        s = re.sub("[\U0001F000-\U0001FAFF☀-➿️‍]", "", s).strip()
+    s = html.escape(s)
+    s = re.sub(r"\{([^{}]*)\}", r'<span class="nw">\1</span>', s)
+    s = re.sub(r"(\([^()<>]*\))", r'<span class="nw">\1</span>', s)
+    s = re.sub(r"(\S+-এর)", r'<span class="nw">\1</span>', s)
+    s = re.sub(r"\[([^\[\]]*)\]", r'<span class="ac">\1</span>', s)
+    return s
+
+
+def build_card_html(spec):
+    g1, g2, g3, ac = CARD_THEMES[spec["theme"]]
+    f = ensure_card_fonts()
+    emo = has_emoji_font()
+    t = lambda s: card_text(s, emo)
+    faces = ""
+    for (sub, w), p in f.items():
+        rng = "U+0964-0965,U+0980-09FE,U+200C-200D,U+25CC" if sub == "bengali" else "U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD"
+        faces += f"@font-face{{font-family:HS;font-weight:{w};src:url('file://{p}') format('woff2');unicode-range:{rng};}}\n"
+    kind = spec.get("kind", "quiz")
+    if kind == "quiz":
+        q = spec.get("question", "")
+        qsize = 42 if len(q) < 110 else 38
+        opts = "".join(
+            f'<div class="op"><span class="bd">{LETTERS[i]}</span><span class="ot">{t(o)}</span></div>'
+            for i, o in enumerate(spec.get("options", [])))
+        mid = f'<div class="q" style="font-size:{qsize}px">{t(q)}</div><div class="ops">{opts}</div>'
+    else:
+        rows = "".join(
+            f'<div class="ar"><div class="al">{t(a.get("label",""))}</div>'
+            f'<div class="aa">{t(a.get("answer",""))}</div>'
+            f'<div class="aw">{t(a.get("work",""))}</div></div>'
+            for a in spec.get("answers", []))
+        mid = f'<div class="ans">{rows}</div>'
+    return f"""<!doctype html><html><head><meta charset="utf-8"><style>
+{faces}
+*{{box-sizing:border-box}}
+body{{margin:0;width:1080px;height:1080px;overflow:hidden;font-family:HS,'Noto Color Emoji',sans-serif;font-weight:500;color:#fff;
+background:radial-gradient(circle at 85% 10%,{g1} 0,{g2} 55%,{g3} 100%)}}
+.fr{{position:absolute;inset:48px;border:3px solid {ac};border-radius:28px;padding:46px 56px;display:flex;flex-direction:column}}
+.top{{display:flex;justify-content:space-between;align-items:flex-start}}
+.brand{{font-weight:700;font-size:44px;letter-spacing:6px;color:{ac};line-height:1.1}}
+.sub{{font-size:20px;color:#cfd9ea;margin-top:4px}}
+.pill{{background:{ac};color:{g2};font-weight:700;font-size:30px;padding:8px 26px;border-radius:40px;line-height:1.3}}
+h1{{font-size:56px;font-weight:700;margin:30px 0 26px;line-height:1.25}}
+.ac{{color:{ac}}}
+.nw{{white-space:nowrap}}
+.mid{{flex:1;display:flex;flex-direction:column;justify-content:center;gap:30px}}
+.q{{line-height:1.45;background:rgba(255,255,255,.07);border-left:8px solid {ac};border-radius:14px;padding:22px 28px}}
+.ops{{display:grid;grid-template-columns:1fr 1fr;gap:18px}}
+.op{{background:#fff;border-radius:16px;padding:14px 20px;display:flex;align-items:center;gap:18px;min-height:88px}}
+.bd{{flex:none;width:56px;height:56px;border-radius:50%;background:{g2};color:{ac};font-weight:700;font-size:30px;display:flex;align-items:center;justify-content:center}}
+.ot{{font-size:36px;font-weight:700;color:{g2};line-height:1.25}}
+.ans{{display:flex;flex-direction:column;gap:22px}}
+.ar{{background:rgba(46,160,90,.18);border:2px solid #3cc274;border-radius:14px;padding:18px 26px;font-size:32px;line-height:1.4}}
+.al{{color:#cfd9ea;font-size:28px}}
+.aa{{font-weight:700;color:#7ff0ad;font-size:36px}}
+.aw{{color:#fff}}
+.ft{{display:flex;justify-content:space-between;align-items:center;margin-top:24px}}
+.cta{{font-size:32px;font-weight:700}}
+.web{{font-size:28px;color:#cfd9ea}}
+</style></head><body><div class="fr">
+<div class="top"><div><div class="brand">UBIQUE</div><div class="sub">Cadet &amp; Defence Academy</div></div>
+<div class="pill">{t(spec.get('tag',''))}</div></div>
+<h1>{t(spec.get('title',''))}</h1>
+<div class="mid">{mid}</div>
+<div class="ft"><div class="cta">{t(spec.get('footer',''))}</div><div class="web">www.ubique.bd</div></div>
+</div></body></html>"""
+
+
 def render(spec, out):
-    reg, bold = ensure_fonts()
     from playwright.sync_api import sync_playwright
     tmp = Path(out).with_suffix(".html")
-    tmp.write_text(build_html(spec, reg, bold), encoding="utf-8")
+    if "theme" in spec:
+        page = build_card_html(spec)
+    else:
+        reg, bold = ensure_fonts()
+        page = build_html(spec, reg, bold)
+    tmp.write_text(page, encoding="utf-8")
     png = Path(out).with_suffix(".png")
     with sync_playwright() as p:
         b = p.chromium.launch()
         pg = b.new_page(viewport={"width": 1080, "height": 1080})
         pg.goto(f"file://{tmp.resolve()}")
-        pg.wait_for_timeout(400)
+        pg.evaluate("document.fonts.ready.then(()=>1)")
+        pg.wait_for_timeout(500)
         pg.screenshot(path=str(png))
         b.close()
     from PIL import Image
